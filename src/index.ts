@@ -1,6 +1,7 @@
 import "dotenv/config";
-import express, { NextFunction, Request, Response } from "express";
-import { findAll, findOne, findTypes } from "./pokemon.repository";
+import express from "express";
+import { errorHandler } from "./http";
+import { router } from "./routes";
 import { setupDatabase } from "./setup";
 
 const app = express();
@@ -11,58 +12,50 @@ app.use(express.json());
 const corsOrigin = process.env.CORS_ORIGIN || "*";
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", corsOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-// Raíz: información básica de la API
+// Raíz: lista de endpoints
 app.get("/", (_req, res) => {
   res.json({
     name: "Pokédex API (Gen 1)",
-    endpoints: ["/api/pokemon", "/api/pokemon/:idOrName", "/api/pokemon?type=fire&name=char", "/api/types"],
+    endpoints: {
+      pokemon: [
+        "GET    /api/pokemon?type=&name=&sort=id|name&order=asc|desc&limit=&offset=",
+        "GET    /api/pokemon/:idOrName",
+        "POST   /api/pokemon",
+        "PUT    /api/pokemon/:id",
+        "PATCH  /api/pokemon/:id",
+        "DELETE /api/pokemon/:id",
+      ],
+      types: [
+        "GET    /api/types",
+        "GET    /api/types/:name",
+        "POST   /api/types",
+        "PUT    /api/types/:name",
+        "PATCH  /api/types/:name",
+        "DELETE /api/types/:name?force=true",
+      ],
+      evolutions: [
+        "GET    /api/evolutions",
+        "GET    /api/evolutions/:from/:to",
+        "POST   /api/evolutions",
+        "PUT    /api/evolutions/:from/:to",
+        "PATCH  /api/evolutions/:from/:to",
+        "DELETE /api/evolutions/:from/:to",
+      ],
+      stats: ["GET    /api/stats"],
+    },
   });
 });
 
-// GET /api/pokemon?type=fire&name=char
-app.get("/api/pokemon", async (req, res, next) => {
-  try {
-    const type = typeof req.query.type === "string" ? req.query.type : undefined;
-    const name = typeof req.query.name === "string" ? req.query.name : undefined;
-    const pokemon = await findAll({ type, name });
-    res.json({ count: pokemon.length, results: pokemon });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/pokemon/25  ó  /api/pokemon/pikachu
-app.get("/api/pokemon/:idOrName", async (req, res, next) => {
-  try {
-    const pokemon = await findOne(req.params.idOrName);
-    if (!pokemon) return res.status(404).json({ error: "Pokémon no encontrado" });
-    res.json(pokemon);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/types
-app.get("/api/types", async (_req, res, next) => {
-  try {
-    res.json(await findTypes());
-  } catch (err) {
-    next(err);
-  }
-});
+app.use("/api", router);
 
 app.use((_req, res) => res.status(404).json({ error: "Ruta no encontrada" }));
-
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error(err);
-  res.status(500).json({ error: "Error interno del servidor" });
-});
+app.use(errorHandler);
 
 const port = Number(process.env.PORT) || 3000;
 

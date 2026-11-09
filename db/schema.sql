@@ -1,14 +1,24 @@
--- Esquema de la Pokédex (primeros 151 Pokémon).
--- Se ejecuta automáticamente al arrancar la API; IF NOT EXISTS evita borrar datos.
+-- Esquema de la Pokédex.
+-- Se ejecuta automáticamente al arrancar la API. Es idempotente: se puede correr
+-- muchas veces sin borrar datos (IF NOT EXISTS / migraciones condicionales).
 
--- Pokémon: el id es el número en la Pokédex nacional (1..151)
+-- Pokémon: el id es el número en la Pokédex nacional
 CREATE TABLE IF NOT EXISTS pokemon (
-  id                 INTEGER PRIMARY KEY CHECK (id BETWEEN 1 AND 151),
+  id                 INTEGER PRIMARY KEY,
   name               VARCHAR(50)  NOT NULL UNIQUE,
   description        TEXT         NOT NULL,
   image_url          TEXT         NOT NULL,
   evolution_chain_id INTEGER      NOT NULL
 );
+
+-- Migración: versiones anteriores limitaban el id a 1..151; ahora se pueden crear más.
+ALTER TABLE pokemon DROP CONSTRAINT IF EXISTS pokemon_id_check;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pokemon_id_positive') THEN
+    ALTER TABLE pokemon ADD CONSTRAINT pokemon_id_positive CHECK (id > 0);
+  END IF;
+END $$;
 
 -- Catálogo de tipos (fire, water, grass...)
 CREATE TABLE IF NOT EXISTS types (
@@ -31,8 +41,11 @@ CREATE TABLE IF NOT EXISTS evolutions (
   trigger         VARCHAR(30),   -- level-up, use-item, trade
   min_level       INTEGER,
   item            VARCHAR(50),
-  PRIMARY KEY (from_pokemon_id, to_pokemon_id)
+  PRIMARY KEY (from_pokemon_id, to_pokemon_id),
+  CHECK (from_pokemon_id <> to_pokemon_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pokemon_chain ON pokemon(evolution_chain_id);
 CREATE INDEX IF NOT EXISTS idx_pokemon_types_type ON pokemon_types(type_id);
+-- Cada Pokémon evoluciona como mucho DESDE uno solo
+CREATE UNIQUE INDEX IF NOT EXISTS ux_evolutions_to ON evolutions(to_pokemon_id);

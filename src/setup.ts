@@ -42,8 +42,9 @@ export async function setupDatabase() {
   await pool.query(schema);
 
   const { rows } = await pool.query("SELECT COUNT(*)::int AS total FROM pokemon");
-  if (rows[0].total < TOTAL) {
-    console.log("Las tablas están vacías, cargando los 151 Pokémon (solo la primera vez)...");
+  // Solo si está vacía: así no se pisan los cambios hechos con POST/PUT/DELETE.
+  if (rows[0].total === 0) {
+    console.log(`Las tablas están vacías, cargando los ${TOTAL} Pokémon (solo la primera vez)...`);
     await seedPokemon();
   }
 }

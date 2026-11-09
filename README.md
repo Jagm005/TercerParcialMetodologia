@@ -1,9 +1,10 @@
 # Pokédex API (Gen 1)
 
-API REST en **TypeScript + Express** que sirve los primeros 151 Pokémon desde **PostgreSQL**.
+API REST en **TypeScript + Express** con **PostgreSQL**: CRUD completo (GET, POST, PUT, PATCH, DELETE)
+sobre los primeros 151 Pokémon, sus tipos y sus evoluciones.
 
 ## Requisitos
-- Node.js 18+
+- Node.js 20+
 - PostgreSQL
 
 ## Instalación
@@ -24,11 +25,12 @@ Al arrancar, la API prepara todo sola:
 - crea las tablas que falten (`CREATE TABLE IF NOT EXISTS`, nunca borra datos),
 - si las tablas están vacías, descarga los 151 Pokémon de pokeapi.co y los guarda (solo la primera vez, tarda unos segundos).
 
-En los siguientes arranques ya no descarga nada: lee todo desde PostgreSQL.
+En los siguientes arranques ya no descarga nada: lee todo desde PostgreSQL, y los cambios hechos
+con POST / PUT / PATCH / DELETE se conservan.
 
 La interfaz visual está en la carpeta hermana `pokedex-web/` y se despliega aparte en Vercel.
 
-Para volver a descargar y reemplazar los datos manualmente:
+Para borrar todos los cambios y volver a los 151 originales:
 
 ```bash
 npm run db:reload
@@ -68,21 +70,95 @@ El `README.md` ya trae la cabecera que Hugging Face necesita (`sdk: docker`, `ap
 
 | Tabla           | Contenido                                                     |
 |-----------------|---------------------------------------------------------------|
-| `pokemon`       | id (# Pokédex), nombre, descripción, imagen, cadena evolutiva |
+| `pokemon`       | id (# Pokédex, se pueden crear más allá del 151), nombre, descripción, imagen, familia evolutiva |
 | `types`         | catálogo de tipos                                             |
 | `pokemon_types` | tipos de cada Pokémon (slot 1 principal, 2 secundario)        |
 | `evolutions`    | de quién a quién evoluciona, con nivel / objeto / intercambio |
 
 ## Endpoints
 
-| Método | Ruta                          | Descripción                              |
-|--------|-------------------------------|------------------------------------------|
-| GET    | `/api/pokemon`                | Los 151 Pokémon                          |
-| GET    | `/api/pokemon?type=fire`      | Filtrar por tipo                         |
-| GET    | `/api/pokemon?name=char`      | Buscar por nombre (parcial)              |
-| GET    | `/api/pokemon/25`             | Por número de Pokédex                    |
-| GET    | `/api/pokemon/pikachu`        | Por nombre                               |
-| GET    | `/api/types`                  | Tipos y cuántos Pokémon tiene cada uno   |
+`GET /` devuelve la lista de endpoints. Todos los cuerpos van en JSON (`Content-Type: application/json`).
+
+### Pokémon
+
+| Método | Ruta                    | Qué hace                                         | SQL                      |
+|--------|-------------------------|--------------------------------------------------|--------------------------|
+| GET    | `/api/pokemon`          | Lista, con filtros, orden y paginación (ver abajo) | SELECT, JOIN, WHERE, ORDER BY, LIMIT/OFFSET |
+| GET    | `/api/pokemon/25`       | Uno por número o por nombre (`/pikachu`)         | SELECT … WHERE           |
+| POST   | `/api/pokemon`          | Crea un Pokémon con sus tipos                    | INSERT (transacción)     |
+| PUT    | `/api/pokemon/25`       | Reemplaza todos los campos                       | UPDATE                   |
+| PATCH  | `/api/pokemon/25`       | Cambia solo los campos enviados                  | UPDATE                   |
+| DELETE | `/api/pokemon/25`       | Lo borra (y sus tipos y evoluciones)             | DELETE … CASCADE         |
+
+Parámetros del listado: `type=fire`, `name=char` (búsqueda parcial), `sort=id|name`, `order=asc|desc`,
+`limit=20`, `offset=40`. La respuesta trae `total` (todos los que coinciden) y `count` (los de esta página).
+
+```json
+// POST /api/pokemon            (PUT igual, pero sin pokedexNumber)
+{
+  "pokedexNumber": 152,
+  "name": "chikorita",
+  "description": "Una hoja crece en su cabeza.",
+  "image": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/152.png",
+  "types": ["grass"]
+}
+
+// PATCH /api/pokemon/152       (cualquier combinación de name, description, image, types)
+{ "types": ["grass", "fairy"] }
+```
+
+### Tipos
+
+| Método | Ruta                            | Qué hace                                             |
+|--------|---------------------------------|------------------------------------------------------|
+| GET    | `/api/types`                    | Todos los tipos y cuántos Pokémon tiene cada uno     |
+| GET    | `/api/types/fire`               | Un tipo con la lista de sus Pokémon                  |
+| POST   | `/api/types`                    | Crea un tipo: `{ "name": "cosmic" }`                 |
+| PUT / PATCH | `/api/types/cosmic`        | Lo renombra: `{ "name": "astral" }`                  |
+| DELETE | `/api/types/cosmic`             | Lo borra. Si algún Pokémon lo usa responde 409; con `?force=true` se lo quita a todos |
+
+Un Pokémon solo puede usar tipos que existan en la tabla `types`.
+
+### Evoluciones
+
+| Método | Ruta                       | Qué hace                                          |
+|--------|----------------------------|---------------------------------------------------|
+| GET    | `/api/evolutions`          | Todas las evoluciones                             |
+| GET    | `/api/evolutions/4/5`      | Una (Charmander → Charmeleon)                     |
+| POST   | `/api/evolutions`          | Crea una (ver cuerpo abajo)                       |
+| PUT    | `/api/evolutions/4/5`      | Reemplaza la condición (lo que no envíes queda en null) |
+| PATCH  | `/api/evolutions/4/5`      | Cambia solo lo enviado: `{ "minLevel": 18 }`      |
+| DELETE | `/api/evolutions/4/5`      | La borra                                          |
+
+```json
+// POST /api/evolutions
+{ "from": 152, "to": 153, "trigger": "level-up", "minLevel": 16, "item": null }
+```
+
+Reglas: un Pokémon no puede evolucionar en sí mismo, solo puede tener una pre-evolución y no se
+permiten ciclos. Al crear o borrar evoluciones las familias (`evolutions.chain`) se recalculan solas.
+
+### Estadísticas
+
+`GET /api/stats`: totales, Pokémon por tipo, cuántos tienen doble tipo, cuántos no evolucionan y las
+familias más grandes (COUNT, GROUP BY, HAVING, subconsultas).
+
+### Errores
+
+| Código | Cuándo                                                          |
+|--------|-----------------------------------------------------------------|
+| 400    | Datos inválidos o faltantes, JSON mal formado, tipo inexistente |
+| 404    | El Pokémon, tipo o evolución no existe                          |
+| 409    | Duplicado (número, nombre, tipo), tipo en uso, ciclo evolutivo  |
+
+Siempre con el formato `{ "error": "mensaje en español" }`.
+
+## Consultas SQL de referencia
+
+[`db/queries.sql`](db/queries.sql) tiene ejemplos listos para ejecutar en pgAdmin o en el SQL Editor de Neon,
+cada uno con el endpoint equivalente: SELECT, WHERE, ILIKE, JOIN, LEFT JOIN, self JOIN, GROUP BY,
+HAVING, EXISTS, ORDER BY, LIMIT/OFFSET, CTE recursiva, INSERT, UPSERT (ON CONFLICT), UPDATE, DELETE,
+transacciones con COMMIT y ROLLBACK.
 
 ### Ejemplo: `GET /api/pokemon/2`
 
